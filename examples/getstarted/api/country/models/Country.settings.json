@@ -10,11 +10,21 @@
     "timestamps": ["created_at", "updated_at"],
     "comment": ""
   },
+  "pluginOptions": {
+    "i18n": {
+      "localized": true
+    }
+  },
   "attributes": {
     "name": {
       "type": "string",
       "required": true,
-      "minLength": 3
+      "minLength": 3,
+      "pluginOptions": {
+        "i18n": {
+          "localized": false
+        }
+      }
     },
     "code": {
       "type": "string",
