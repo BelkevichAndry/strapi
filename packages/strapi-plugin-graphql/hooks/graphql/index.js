@@ -114,9 +114,10 @@ module.exports = strapi => {
           };
         },
         formatError: err => {
-          const formatError = _.get(config, 'formatError', null);
+          "TEST"
+//           const formatError = _.get(config, 'formatError', null);
 
-          return typeof formatError === 'function' ? formatError(err) : err;
+//           return typeof formatError === 'function' ? formatError(err) : err;
         },
         validationRules: [depthLimit(config.depthLimit)],
         playground: false,
