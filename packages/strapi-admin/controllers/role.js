@@ -4,7 +4,6 @@ const { yup, formatYupErrors } = require('strapi-utils');
 const { validateRoleUpdateInput } = require('../validation/role');
 const { validatedUpdatePermissionsInput } = require('../validation/permission');
 const { EDITOR_CODE, AUTHOR_CODE, SUPER_ADMIN_CODE } = require('../services/constants');
-const { getService, getServices } = require('../utils');
 
 module.exports = {
   /**
@@ -13,7 +12,7 @@ module.exports = {
    */
   async findOne(ctx) {
     const { id } = ctx.params;
-    const role = await getService('role').findOneWithUsersCount({ id });
+    const role = await strapi.admin.services.role.findOneWithUsersCount({ id });
 
     if (!role) {
       return ctx.notFound('role.notFound');
@@ -29,7 +28,7 @@ module.exports = {
    * @param {KoaContext} ctx - koa context
    */
   async findAll(ctx) {
-    const roles = await getService('role').findAllWithUsersCount();
+    const roles = await strapi.admin.services.role.findAllWithUsersCount();
 
     ctx.body = {
       data: roles,
@@ -42,9 +41,6 @@ module.exports = {
    */
   async update(ctx) {
     const { id } = ctx.params;
-    const { body } = ctx.request;
-
-    const { role: roleService } = getService('role');
 
     try {
       await validateRoleUpdateInput(ctx.request.body);
@@ -52,8 +48,7 @@ module.exports = {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const role = await roleService.findOne({ id });
-
+    const role = await strapi.admin.services.role.findOne({ id });
     if (!role) {
       return ctx.notFound('role.notFound');
     }
@@ -62,8 +57,9 @@ module.exports = {
       return ctx.badRequest("Super admin can't be edited.");
     }
 
-    const updatedRole = await roleService.update({ id }, body);
-    const sanitizedRole = roleService.sanitizeRole(updatedRole);
+    const updatedRole = await strapi.admin.services.role.update({ id }, ctx.request.body);
+
+    const sanitizedRole = strapi.admin.services.role.sanitizeRole(updatedRole);
 
     ctx.body = {
       data: sanitizedRole,
@@ -77,16 +73,16 @@ module.exports = {
   async getPermissions(ctx) {
     const { id } = ctx.params;
 
-    const [roleService, permissionService] = getServices('role', 'permission');
-
-    const role = await roleService.findOne({ id });
+    const role = await strapi.admin.services.role.findOne({ id });
 
     if (!role) {
       return ctx.notFound('role.notFound');
     }
 
-    const permissions = await permissionService.find({ role: role.id, _limit: -1 });
-    const sanitizedPermissions = permissions.map(permissionService.sanitizePermission);
+    const permissions = await strapi.admin.services.permission.find({ role: role.id, _limit: -1 });
+    const sanitizedPermissions = permissions.map(
+      strapi.admin.services.permission.sanitizePermission
+    );
 
     ctx.body = {
       data: sanitizedPermissions,
@@ -98,47 +94,45 @@ module.exports = {
    * @param {KoaContext} ctx - koa context
    */
   async updatePermissions(ctx) {
-    const [roleService, permissionService] = getServices('role', 'permission');
-
     const { id } = ctx.params;
-    const { body: input } = ctx.request;
+    const input = ctx.request.body;
 
-    const role = await roleService.findOne({ id });
-
+    const role = await strapi.admin.services.role.findOne({ id });
     if (!role) {
       return ctx.notFound('role.notFound');
     }
 
     try {
       if (role.code === SUPER_ADMIN_CODE) {
-        throw formatYupErrors(new yup.ValidationError("Super admin permissions can't be edited."));
+        const err = new yup.ValidationError("Super admin permissions can't be edited.");
+        throw formatYupErrors(err);
       }
-
       await validatedUpdatePermissionsInput(input, role);
     } catch (err) {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const actionsMap = permissionService.actionProvider.getAllByMap();
+    let existingPermissions = strapi.admin.services.permission.actionProvider.getAllByMap();
     let permissionsToAssign;
-
     if ([EDITOR_CODE, AUTHOR_CODE].includes(role.code)) {
-      permissionsToAssign = input.permissions.map(permission => {
-        const action = actionsMap.get(permission.action);
-
-        if (action.section !== 'contentTypes') {
-          return permission;
-        }
-
-        const conditions = role.code === AUTHOR_CODE ? ['admin::is-creator'] : [];
-
-        return { ...permission, conditions };
-      });
+      permissionsToAssign = input.permissions.filter(
+        p => existingPermissions.get(p.action).section !== 'contentTypes'
+      );
+      const modifiedPermissions = input.permissions
+        .filter(p => existingPermissions.get(p.action).section === 'contentTypes')
+        .map(p => ({
+          ...p,
+          conditions: role.code === AUTHOR_CODE ? ['admin::is-creator'] : [],
+        }));
+      permissionsToAssign.push(...modifiedPermissions);
     } else {
       permissionsToAssign = input.permissions;
     }
 
-    const permissions = await roleService.assignPermissions(role.id, permissionsToAssign);
+    const permissions = await strapi.admin.services.role.assignPermissions(
+      role.id,
+      permissionsToAssign
+    );
 
     ctx.body = {
       data: permissions,

@@ -4,12 +4,15 @@ const _ = require('lodash');
 const { contentTypes: contentTypesUtils } = require('strapi-utils');
 
 const { PUBLISHED_AT_ATTRIBUTE } = contentTypesUtils.constants;
+const { getDefinitionFromStore } = require('../utils/store-definition');
 
-const getDraftAndPublishMigrationWay = async ({ definition, previousDefinition }) => {
-  const previousDraftAndPublish = contentTypesUtils.hasDraftAndPublish(previousDefinition);
+const getDraftAndPublishMigrationWay = async (definition, ORM) => {
+  const previousDefRow = await getDefinitionFromStore(definition, ORM);
+  const previousDef = JSON.parse(_.get(previousDefRow, 'value', null));
+  const previousDraftAndPublish = contentTypesUtils.hasDraftAndPublish(previousDef);
   const actualDraftAndPublish = contentTypesUtils.hasDraftAndPublish(definition);
 
-  if (!previousDefinition || previousDraftAndPublish === actualDraftAndPublish) {
+  if (!previousDefRow || previousDraftAndPublish === actualDraftAndPublish) {
     return 'none';
   }
   if (!previousDraftAndPublish && actualDraftAndPublish) {
@@ -20,8 +23,8 @@ const getDraftAndPublishMigrationWay = async ({ definition, previousDefinition }
   }
 };
 
-const migrateDraftAndPublish = async ({ definition, previousDefinition, model }) => {
-  let way = await getDraftAndPublishMigrationWay({ definition, previousDefinition });
+const migrateDraftAndPublish = async ({ definition, model, ORM }) => {
+  let way = await getDraftAndPublishMigrationWay(definition, ORM);
 
   if (way === 'enable') {
     const createdAtCol = _.get(definition, 'timestamps.createdAt', 'createdAt');

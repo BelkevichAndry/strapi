@@ -1,22 +1,9 @@
 'use strict';
 
-const {
-  curry,
-  map,
-  filter,
-  each,
-  isFunction,
-  isArray,
-  isEmpty,
-  isObject,
-  prop,
-  merge,
-  pick,
-  difference,
-} = require('lodash/fp');
+const _ = require('lodash');
+const { map, filter, each } = require('lodash/fp');
 const { AbilityBuilder, Ability } = require('@casl/ability');
 const sift = require('sift');
-const { getService } = require('../../utils');
 
 const allowedOperations = [
   '$or',
@@ -31,196 +18,118 @@ const allowedOperations = [
   '$exists',
   '$elemMatch',
 ];
-const operations = pick(allowedOperations, sift);
+const operations = _.pick(sift, allowedOperations);
 
 const conditionsMatcher = conditions => {
   return sift.createQueryTester(conditions, { operations });
 };
 
-module.exports = conditionProvider => {
-  const permissionsHandlers = [];
+module.exports = conditionProvider => ({
+  /**
+   * Generate an ability based on the given user (using associated roles & permissions)
+   * @param user
+   * @param options
+   * @returns {Promise<Ability>}
+   */
+  async generateUserAbility(user, options) {
+    const permissions = await strapi.admin.services.permission.findUserPermissions(user);
+    const abilityCreator = this.generateAbilityCreatorFor(user);
 
-  return {
-    registerPermissionsHandler(handler) {
-      if (isFunction(handler)) {
-        permissionsHandlers.push(handler);
-      }
-    },
+    return abilityCreator(permissions, options);
+  },
 
-    registerPermissionsHandlers(handlers) {
-      for (const handler of handlers) {
-        this.registerPermissionsHandler(handler);
-      }
-    },
+  /**
+   * Create an ability factory for a specific user
+   * @param user
+   * @returns {function(*, *): Promise<Ability>}
+   */
+  generateAbilityCreatorFor(user) {
+    return async (permissions, options) => {
+      const { can, build } = new AbilityBuilder(Ability);
+      const registerFn = this.createRegisterFunction(can);
 
-    /**
-     * Generate an ability based on the given user (using associated roles & permissions)
-     * @param user
-     * @param options
-     * @returns {Promise<Ability>}
-     */
-    async generateUserAbility(user, options) {
-      const permissions = await getService('permission').findUserPermissions(user);
-      const abilityCreator = this.generateAbilityCreatorFor(user);
-
-      return abilityCreator(permissions, options);
-    },
-
-    /**
-     * Create an ability factory for a specific user
-     * @param user
-     * @returns {function(*, *): Promise<Ability>}
-     */
-    generateAbilityCreatorFor(user) {
-      return async (permissions, options) => {
-        const { can, build } = new AbilityBuilder(Ability);
-        const registerFn = this.createRegisterFunction(can);
-
-        for (const permission of permissions) {
-          await this.evaluate({ permission, user, options, registerFn });
-        }
-
-        return build({ conditionsMatcher });
-      };
-    },
-
-    /**
-     * Validate, invalidate and transform the permission attributes
-     * @param {Permission} permission
-     * @returns {null|Permission}
-     */
-    formatPermission(permission) {
-      const { actionProvider } = getService('permission');
-
-      const action = actionProvider.getByActionId(permission.action);
-
-      // If the action isn't registered into the action provider, then ignore the permission
-      if (!action) {
-        return null;
+      for (const permission of permissions) {
+        await this.evaluatePermission({ permission, user, options, registerFn });
       }
 
-      // Only keep the properties allowed by the action (action.applyToProperties)
-      const propertiesName = Object.keys(permission.properties);
-      const invalidProperties = difference(
-        propertiesName,
-        action.applyToProperties || propertiesName
-      );
+      return build({ conditionsMatcher });
+    };
+  },
 
-      invalidProperties.forEach(property => permission.deleteProperty(property));
+  /**
+   * Register new rules using `registerFn` based on valid permission's conditions
+   * @param permission
+   * @param user
+   * @param options
+   * @param registerFn
+   * @returns {Promise<void>}
+   */
+  async evaluatePermission({ permission, user, options, registerFn }) {
+    const { action, fields, conditions } = permission;
+    const subject = permission.subject || 'all';
 
-      // If the `fields` property is an empty array, then ignore the permission
-      const { fields } = permission.properties;
+    // Permissions with empty fields array should be removed
+    if (Array.isArray(fields) && fields.length === 0) {
+      return;
+    }
 
-      if (isArray(fields) && isEmpty(fields)) {
-        return null;
-      }
+    // Directly registers the permission if there is no condition to check/evaluate
+    if (_.isUndefined(conditions) || _.isEmpty(conditions)) {
+      return registerFn({ action, subject, fields, condition: true });
+    }
 
-      return permission;
-    },
+    // Replace each condition name by its associated value
+    const resolveConditions = map(conditionProvider.getById);
 
-    /**
-     * Update the permission components through various processing
-     * @param {Permission} permission
-     * @returns {Promise<void>}
-     */
-    async applyPermissionProcessors(permission) {
-      // 1. Evaluate every registered permissions handler
-      await Promise.all(permissionsHandlers.map(handler => handler(permission)));
-    },
+    // Only keep the handler of each condition
+    const pickHandlers = map(_.property('handler'));
 
-    /**
-     * Register new rules using `registerFn` based on valid permission's conditions
-     * @param options {object}
-     * @param options.permission {object}
-     * @param options.user {object}
-     * @param options.options {object | undefined}
-     * @param options.registerFn {Function}
-     * @returns {Promise<void>}
-     */
-    async evaluate(options) {
-      const { user, registerFn, options: conditionOptions } = options;
+    // Filter conditions, only keeps objects and functions
+    const filterValidConditions = filter(_.isObject);
 
-      // Assert options.permission validity and format it
-      const permission = this.formatPermission(options.permission);
+    // Evaluate the conditions if they're a function, returns the object otherwise
+    const evaluateConditions = conditions =>
+      Promise.all(conditions.map(cond => (_.isFunction(cond) ? cond(user, options) : cond)));
 
-      // If options.permission is invalid, then ignore the permission
-      if (permission === null) {
-        return;
-      }
+    // Only keeps 'true' booleans or objects as condition's result
+    const filterValidResults = filter(result => result === true || _.isObject(result));
 
-      await this.applyPermissionProcessors(permission);
+    // Transform each result into registerFn options
+    const transformToRegisterOptions = map(result => ({
+      action,
+      subject,
+      fields,
+      condition: result,
+    }));
 
-      // Extract the up-to-date components from the permission
-      const { action, subject = 'all', properties, conditions } = permission;
+    // Register each result using the registerFn
+    const registerResults = each(registerFn);
 
-      // Register the permission if there is no condition
-      if (isEmpty(conditions)) {
-        return registerFn({ action, subject, fields: properties.fields, condition: true });
-      }
+    await Promise.resolve(conditions)
+      .then(resolveConditions)
+      .then(pickHandlers)
+      .then(filterValidConditions)
+      .then(evaluateConditions)
+      .then(filterValidResults)
+      .then(transformToRegisterOptions)
+      .then(registerResults);
+  },
 
-      /** Set of functions used to resolve + evaluate conditions & register the permission if allowed */
+  /**
+   * Encapsulate a register function with custom params to fit `evaluatePermission`'s syntax
+   * @param can
+   * @returns {function({action?: *, subject?: *, fields?: *, condition?: *}): *}
+   */
+  createRegisterFunction(can) {
+    return ({ action, subject, fields, condition }) => {
+      return can(action, subject, fields, _.isObject(condition) ? condition : undefined);
+    };
+  },
 
-      // 1. Replace each condition name by its associated value
-      const resolveConditions = map(conditionProvider.getById);
-
-      // 2. Only keep the handler of each condition
-      const pickHandlers = map(prop('handler'));
-
-      // 3. Filter conditions, only keep objects and functions
-      const filterValidConditions = filter(isObject);
-
-      // 4. Evaluate the conditions if they're a function, returns the object otherwise
-      const evaluateConditions = conditions => {
-        return Promise.all(
-          conditions.map(cond =>
-            isFunction(cond) ? cond(user, merge(conditionOptions, permission.json)) : cond
-          )
-        );
-      };
-
-      // 5. Only keeps 'true' booleans or objects as condition's result
-      const filterValidResults = filter(result => result === true || isObject(result));
-
-      // 6. Transform each result into registerFn options
-      const transformToRegisterOptions = map(result => ({
-        action,
-        subject,
-        fields: properties.fields,
-        condition: result,
-      }));
-
-      // 7. Register each result using the registerFn
-      const registerResults = each(registerFn);
-
-      /**/
-
-      // Execute all the steps needed to register the permission with its associated conditions
-      await Promise.resolve(conditions)
-        .then(resolveConditions)
-        .then(pickHandlers)
-        .then(filterValidConditions)
-        .then(evaluateConditions)
-        .then(filterValidResults)
-        .then(transformToRegisterOptions)
-        .then(registerResults);
-    },
-
-    /**
-     * Encapsulate a register function with custom params to fit `evaluatePermission`'s syntax
-     * @param can
-     * @returns {function({action?: *, subject?: *, fields?: *, condition?: *}): *}
-     */
-    createRegisterFunction(can) {
-      return ({ action, subject, fields, condition }) => {
-        return can(action, subject, fields, isObject(condition) ? condition : undefined);
-      };
-    },
-
-    /**
-     * Check many permissions based on an ability
-     */
-    checkMany: curry((ability, permissions) => {
-      return permissions.map(({ action, subject, field }) => ability.can(action, subject, field));
-    }),
-  };
-};
+  /**
+   * Check many permissions based on an ability
+   */
+  checkMany: _.curry((ability, permissions) => {
+    return permissions.map(({ action, subject, field }) => ability.can(action, subject, field));
+  }),
+});

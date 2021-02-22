@@ -6,7 +6,6 @@ const {
   validateRoleDeleteInput,
   validateRolesDeleteInput,
 } = require('../validation/role');
-const { getService, getServices } = require('../../utils');
 const { validatedUpdatePermissionsInput } = require('../validation/permission');
 const { SUPER_ADMIN_CODE } = require('../../services/constants');
 
@@ -22,11 +21,9 @@ module.exports = {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const roleService = getService('role');
+    let role = await strapi.admin.services.role.create(ctx.request.body);
 
-    const role = await roleService.create(ctx.request.body);
-    const sanitizedRole = roleService.sanitizeRole(role);
-
+    const sanitizedRole = strapi.admin.services.role.sanitizeRole(role);
     ctx.created({ data: sanitizedRole });
   },
 
@@ -43,10 +40,9 @@ module.exports = {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const roleService = getService('role');
+    const roles = await strapi.admin.services.role.deleteByIds([id]);
 
-    const roles = await roleService.deleteByIds([id]);
-    const sanitizedRole = roles.map(roleService.sanitizeRole)[0] || null;
+    const sanitizedRole = roles.map(strapi.admin.services.role.sanitizeRole)[0] || null;
 
     return ctx.deleted({
       data: sanitizedRole,
@@ -65,10 +61,8 @@ module.exports = {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const roleService = getService('role');
-
-    const roles = await roleService.deleteByIds(body.ids);
-    const sanitizedRoles = roles.map(roleService.sanitizeRole);
+    const roles = await strapi.admin.services.role.deleteByIds(body.ids);
+    const sanitizedRoles = roles.map(strapi.admin.services.role.sanitizeRole);
 
     return ctx.deleted({
       data: sanitizedRoles,
@@ -81,21 +75,18 @@ module.exports = {
    */
   async updatePermissions(ctx) {
     const { id } = ctx.params;
-    const { body: input } = ctx.request;
+    const input = ctx.request.body;
 
-    const [roleService, permissionService] = getServices('role', 'permission');
-
-    const role = await roleService.findOne({ id });
-
+    const role = await strapi.admin.services.role.findOne({ id });
     if (!role) {
       return ctx.notFound('role.notFound');
     }
 
     try {
       if (role.code === SUPER_ADMIN_CODE) {
-        throw formatYupErrors(new yup.ValidationError("Super admin permissions can't be edited."));
+        const err = new yup.ValidationError("Super admin permissions can't be edited.");
+        throw formatYupErrors(err);
       }
-
       await validatedUpdatePermissionsInput(input);
     } catch (err) {
       return ctx.badRequest('ValidationError', err);
@@ -105,11 +96,13 @@ module.exports = {
       return ctx.notFound('role.notFound');
     }
 
-    const permissions = await roleService.assignPermissions(role.id, input.permissions);
-    const sanitizedPermissions = permissions.map(permissionService.sanitizePermission);
+    const permissions = await strapi.admin.services.role.assignPermissions(
+      role.id,
+      input.permissions
+    );
 
     ctx.body = {
-      data: sanitizedPermissions,
+      data: permissions,
     };
   },
 };

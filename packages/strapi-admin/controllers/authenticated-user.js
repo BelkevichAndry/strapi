@@ -1,11 +1,10 @@
 'use strict';
 
 const { validateProfileUpdateInput } = require('../validation/user');
-const { getService } = require('../utils');
 
 module.exports = {
   async getMe(ctx) {
-    const userInfo = getService('user').sanitizeUser(ctx.state.user);
+    const userInfo = strapi.admin.services.user.sanitizeUser(ctx.state.user);
 
     ctx.body = {
       data: userInfo,
@@ -21,20 +20,17 @@ module.exports = {
       return ctx.badRequest('ValidationError', err);
     }
 
-    const { user: userService } = getService('user');
-
-    const updatedUser = await userService.updateById(ctx.state.user.id, input);
+    const updatedUser = await strapi.admin.services.user.updateById(ctx.state.user.id, input);
 
     ctx.body = {
-      data: userService.sanitizeUser(updatedUser),
+      data: strapi.admin.services.user.sanitizeUser(updatedUser),
     };
   },
 
   async getOwnPermissions(ctx) {
-    const { findUserPermissions, sanitizePermission } = getService('permission');
-    const { user } = ctx.state;
+    const { findUserPermissions, sanitizePermission } = strapi.admin.services.permission;
 
-    const userPermissions = await findUserPermissions(user);
+    const userPermissions = await findUserPermissions(ctx.state.user);
 
     ctx.body = {
       data: userPermissions.map(sanitizePermission),

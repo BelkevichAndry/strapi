@@ -4,9 +4,12 @@ const _ = require('lodash');
 const { contentTypes: contentTypesUtils } = require('strapi-utils');
 
 const { PUBLISHED_AT_ATTRIBUTE } = contentTypesUtils.constants;
+const { getDefinitionFromStore } = require('../utils/store-definition');
 
-const getDraftAndPublishMigrationWay = async ({ definition, previousDefinition }) => {
-  const previousDraftAndPublish = contentTypesUtils.hasDraftAndPublish(previousDefinition);
+const getDraftAndPublishMigrationWay = async ({ definition, ORM }) => {
+  const previousDefRow = await getDefinitionFromStore(definition, ORM);
+  const previousDef = JSON.parse(_.get(previousDefRow, 'value', null));
+  const previousDraftAndPublish = contentTypesUtils.hasDraftAndPublish(previousDef);
   const actualDraftAndPublish = contentTypesUtils.hasDraftAndPublish(definition);
 
   if (previousDraftAndPublish === actualDraftAndPublish) {
@@ -20,8 +23,8 @@ const getDraftAndPublishMigrationWay = async ({ definition, previousDefinition }
   }
 };
 
-const before = async ({ definition, previousDefinition, ORM }, context) => {
-  const way = await getDraftAndPublishMigrationWay({ definition, previousDefinition });
+const before = async ({ definition, ORM }, context) => {
+  const way = await getDraftAndPublishMigrationWay({ definition, ORM });
 
   if (way === 'disable') {
     const publishedAtColumnExists = await ORM.knex.schema.hasColumn(
@@ -47,8 +50,8 @@ const before = async ({ definition, previousDefinition, ORM }, context) => {
   }
 };
 
-const after = async ({ definition, previousDefinition, ORM }) => {
-  const way = await getDraftAndPublishMigrationWay({ definition, previousDefinition });
+const after = async ({ definition, ORM }) => {
+  const way = await getDraftAndPublishMigrationWay({ definition, ORM });
 
   if (way === 'enable') {
     const now = new Date();

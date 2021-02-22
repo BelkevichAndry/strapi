@@ -8,11 +8,7 @@ const utils = require('./utils');
 const populateQueries = require('./utils/populate-queries');
 const relations = require('./relations');
 const { findComponentByGlobalId } = require('./utils/helpers');
-const {
-  didDefinitionChange,
-  storeDefinition,
-  getDefinitionFromStore,
-} = require('./utils/store-definition');
+const { didDefinitionChange, storeDefinition } = require('./utils/store-definition');
 
 const {
   PUBLISHED_AT_ATTRIBUTE,
@@ -295,7 +291,7 @@ module.exports = async ({ models, target }, ctx) => {
     target[model].privateAttributes = contentTypesUtils.getPrivateAttributes(target[model]);
   }
 
-  // Instantiate every models
+  // Instanciate every models
   Object.keys(models).forEach(mountModel);
 
   // Migrations + storing schema
@@ -304,13 +300,9 @@ module.exports = async ({ models, target }, ctx) => {
     const modelInstance = target[model];
     const definitionDidChange = await didDefinitionChange(definition, instance);
 
-    const previousDefinitionRow = await getDefinitionFromStore(definition, instance);
-    const previousDefinition = JSON.parse(_.get(previousDefinitionRow, 'value', null));
-
     // run migrations
     await strapi.db.migrations.run(migrateSchema, {
       definition,
-      previousDefinition,
       model: modelInstance,
       ORM: instance,
     });
